@@ -161,6 +161,21 @@ export const optionalAuth = (req, res, next) => {
       }
     }
   }
-
   next();
+};
+/**
+ * @middleware verificarRol
+ * @description Permite el acceso solo si el rol del usuario está en la lista permitida.
+ * @param {Array<number>} rolesPermitidos - Array de IDs de roles (ej: [1, 2] para Gerente y Jefe)
+ */
+export const verificarRol = (rolesPermitidos) => {
+  return (req, res, next) => {
+    // req.usuario viene del middleware protegerRuta anterior
+    if (!req.usuario || !rolesPermitidos.includes(req.usuario.id_rol)) {
+      return res.status(403).json({
+        message: "⛔ Acceso denegado: No tienes permisos para realizar esta acción."
+      });
+    }
+    next();
+  };
 };
