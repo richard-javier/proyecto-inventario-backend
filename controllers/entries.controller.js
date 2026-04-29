@@ -73,3 +73,85 @@ export const registrarIngresoFormal = async (req, res) => {
     if (connection) connection.release();
   }
 };
+// Guardar una nueva Nota de Ingreso
+export const guardarNotaIngreso = async (req, res) => {
+    const { nota, productos } = req.body;
+    let connection;
+
+    try {
+        connection = await db.getConnection();
+        await connection.beginTransaction(); // Iniciamos transacción por seguridad
+
+        // 1. Obtener el último secuencial para generar el siguiente (Ej: 0001)
+        const [lastNote] = await connection.query("SELECT secuencial FROM notas_ingreso ORDER BY id_nota DESC LIMIT 1");
+        let nuevoSecuencial = "0001";
+        if (lastNote.length > 0) {
+            const ultimoNum = parseInt(lastNote[0].secuencial, 10);
+            nuevoSecuencial = (ultimoNum + 1).toString().padStart(4, '0');
+        }
+
+        // 2. Insertar la Cabecera
+        const [resNota] = await connection.query(
+            `INSERT INTO notas_ingreso (secuencial, fecha, hora, proveedor, orden_compra, proviene_de, estado_mercaderia, placa_vehiculo, aforo, observaciones, entregado_nombre, entregado_cargo, recibido_nombre, recibido_cargo) 
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            [nuevoSecuencial, nota.fecha, nota.hora, nota.proveedor, nota.ordenCompra, nota.provieneDe, nota.estadoMercaderia, nota.placaVehiculo, nota.aforo, nota.observaciones, nota.entregadoPor.nombre, nota.entregadoPor.cargo, nota.recibidoPor.nombre, nota.recibidoPor.cargo]
+        );
+
+        const idNotaGenerada = resNota.insertId;
+
+        // 3. Insertar los detalles (el arreglo de productos)
+        const detalleQueries = productos.map(p => {
+            return connection.query(
+                `INSERT INTO notas_ingreso_detalle (id_nota, perdida, recibida, pendiente, descripcion_producto, guia_secuencial) 
+                 VALUES (?, ?, ?, ?, ?, ?)`,
+                [idNotaGenerada, p.perdida, p.recibida, p.pendiente, p.descripcion, p.guia]
+            );
+        });
+
+        await Promise.all(detalleQueries);
+
+        await connection.commit(); // Todo bien, guardamos cambios físicos
+        res.status(201).json({ message: "✅ Nota de Ingreso guardada con éxito", secuencial: nuevoSecuencial });
+
+    } catch (error) {
+        if (connection) await connection.rollback(); // Error, deshacemos todo
+        console.error(error);
+        res.status(500).json({ message: "Error al procesar el ingreso." });
+    } finally {
+        if (connection) connection.release();
+    }
+};
+
+// Obtener todas las notas para la trazabilidad (Reporte)
+export const obtenerHistorialNotas = async (req, res) => {
+    try {
+        const [rows] = await db.query("SELECT * FROM notas_ingreso ORDER BY secuencial DESC");
+        res.json(rows);
+    } catch (error) {
+        res.status(500).json({ message: "Error al obtener historial." });
+    }
+};
+// 1. Obtener todas las notas (Cabecera) para la tabla principal
+export const obtenerNotasIngreso = async (req, res) => {
+    try {
+        const [rows] = await db.query("SELECT * FROM notas_ingreso ORDER BY fecha_registro DESC");
+        res.json(rows);
+    } catch (error) {
+        res.status(500).json({ message: "Error al obtener el historial de notas." });
+    }
+};
+
+// 2. Obtener UNA nota con sus detalles (Para volver a generar el PDF)
+export const obtenerDetalleNota = async (req, res) => {
+    const { id } = req.params;
+    try {
+        const [cabecera] = await db.query("SELECT * FROM notas_ingreso WHERE id_nota = ?", [id]);
+        const [detalles] = await db.query("SELECT * FROM notas_ingreso_detalle WHERE id_nota = ?", [id]);
+        
+        if (cabecera.length === 0) return res.status(404).json({ message: "Nota no encontrada" });
+
+        res.json({ cabecera: cabecera[0], productos: detalles });
+    } catch (error) {
+        res.status(500).json({ message: "Error al obtener el detalle." });
+    }
+};
