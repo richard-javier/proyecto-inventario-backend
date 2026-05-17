@@ -1,62 +1,71 @@
 import db from "../config/db.js";
+import axios from "axios"; 
 
-export const registrarSalida = async (req, res) => {
-  const { cabecera, items } = req.body; 
-  
-  if (!req.usuario || !req.usuario.id_usuario) {
-      return res.status(401).json({ message: "No autorizado." });
-  }
-  const id_usuario = req.usuario.id_usuario;
+export const registrarSalidaFormal = async (req, res) => {
+    // 1. AHORA RECIBIMOS LA VARIABLE "ignorarIA" DESDE REACT
+    const { cabecera, items, ignorarIA } = req.body;
+    let connection;
 
-  if (!items || items.length === 0) {
-    return res.status(400).json({ message: "No hay productos para despachar." });
-  }
+    try {
+        connection = await db.getConnection();
+        await connection.beginTransaction();
 
-  let connection;
-  try {
-    connection = await db.getConnection();
-    await connection.beginTransaction();
+        // =========================================================
+        // 2. AUDITORÍA IA (SOLO SE EJECUTA SI NO HAY UN BYPASS)
+        // =========================================================
+        if (!ignorarIA) {
+            for (let item of items) {
+                try {
+                    const iaResponse = await axios.post('http://localhost:5000/detectar_anomalia', {
+                        cantidad: item.cantidad,
+                        precio: item.precio
+                    });
 
-    for (const item of items) {
-      // 1. Verificar stock disponible por seguridad (Doble validación)
-      const [prod] = await connection.query("SELECT stock_actual, nombre_producto FROM productos WHERE id_producto = ?", [item.id_producto]);
-      
-      if (prod[0].stock_actual < item.cantidad) {
-          throw new Error(`Stock insuficiente para ${prod[0].nombre_producto}. Disponible: ${prod[0].stock_actual}`);
-      }
+                    if (iaResponse.data.es_anomalia) {
+                        await connection.rollback(); 
+                        return res.status(400).json({ 
+                            message: `⚠️ ALERTA DE IA: La salida de ${item.cantidad} uds del producto ${item.sku} a $${item.precio} genera un total anómalo para el historial. Si es un pedido legítimo, autorice la excepción.` 
+                        });
+                    }
+                } catch (iaError) {
+                    console.error("Error conectando con IA:", iaError.message);
+                    await connection.rollback();
+                    return res.status(503).json({ message: "❌ Error de conexión con el Motor de IA." });
+                }
+            }
+        }
 
-      // 2. Registrar en tabla salidas
-      await connection.query(
-        `INSERT INTO salidas 
-        (id_producto, cantidad, precio_venta, punto_destino, motivo, placa_vehiculo, observaciones, id_usuario)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-        [
-          item.id_producto, 
-          item.cantidad, 
-          item.precio, 
-          cabecera.punto_destino, 
-          cabecera.motivo,
-          cabecera.placa_vehiculo,
-          cabecera.observaciones, 
-          id_usuario
-        ]
-      );
+        // =========================================================
+        // 3. GUARDAMOS EN MYSQL
+        // =========================================================
+        const [resSalida] = await connection.query(
+            `INSERT INTO salidas (punto_destino, motivo, transportista, placa_vehiculo, observaciones) VALUES (?, ?, ?, ?, ?)`,
+            [cabecera.punto_destino, cabecera.motivo, cabecera.transportista || 'N/A', cabecera.placa_vehiculo || 'N/A', cabecera.observaciones || '']
+        );
 
-      // 3. Restar stock físico
-      await connection.query(
-        "UPDATE productos SET stock_actual = stock_actual - ? WHERE id_producto = ?",
-        [item.cantidad, item.id_producto]
-      );
+        const id_salida = resSalida.insertId;
+
+        const detalleQueries = items.map(item => {
+            connection.query(
+                `INSERT INTO salidas_detalle (id_salida, id_producto, cantidad, precio_salida) VALUES (?, ?, ?, ?)`,
+                [id_salida, item.id_producto, item.cantidad, item.precio]
+            );
+            return connection.query(
+                `UPDATE productos SET stock_actual = stock_actual - ? WHERE id_producto = ?`,
+                [item.cantidad, item.id_producto]
+            );
+        });
+
+        await Promise.all(detalleQueries);
+        await connection.commit();
+        
+        res.status(201).json({ message: "✅ Despacho procesado con éxito." });
+
+    } catch (error) {
+        if (connection) await connection.rollback();
+        console.error("Error en salida:", error);
+        res.status(500).json({ message: "Error interno al procesar el despacho.", error: error.message });
+    } finally {
+        if (connection) connection.release();
     }
-
-    await connection.commit();
-    res.status(201).json({ message: "✅ Despacho masivo procesado exitosamente." });
-
-  } catch (error) {
-    if (connection) await connection.rollback();
-    console.error("❌ Error en salida masiva:", error.message);
-    res.status(400).json({ message: error.message || "Error al procesar el despacho." });
-  } finally {
-    if (connection) connection.release();
-  }
 };

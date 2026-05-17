@@ -11,7 +11,7 @@ import { crearLote, obtenerHistorialLotes } from '../controllers/lots.controller
 import { obtenerLotesPendientes, registrarIngresoFormal } from '../controllers/entries.controller.js'; 
 
 // Importamos controladores de Salidas e Historial
-import { registrarSalida } from '../controllers/outputs.controller.js'; 
+import { registrarSalidaFormal } from '../controllers/outputs.controller.js';
 import { obtenerHistorial } from '../controllers/history.controller.js';
 
 // --- AQUÍ ESTÁ LA CORRECCIÓN: Se agregó guardarNotaIngreso ---
@@ -43,7 +43,7 @@ router.put('/:id', protegerRuta, verificarRol([1, 2]), actualizarProducto);
 router.delete('/:id', protegerRuta, verificarRol([1]), eliminarProducto);   
 
 // --- RUTAS DE SALIDAS E HISTORIAL ---
-router.post('/salida', protegerRuta, verificarRol([1, 2, 4]), registrarSalida);
+router.post('/salida', registrarSalidaFormal);
 router.get('/historial', protegerRuta, obtenerHistorial);
 
 // --- RUTAS DE NOTAS DE INGRESO ---
