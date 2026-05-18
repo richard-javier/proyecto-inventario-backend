@@ -75,14 +75,21 @@ def predecir():
 def detectar():
     datos = request.json
     try:
-        cantidad = datos['cantidad']
-        precio = datos['precio']
+        # 1. Extraer los datos enviados por Node.js (asegurando que sean números flotantes)
+        cantidad = float(datos.get('cantidad', 0))
+        precio = float(datos.get('precio', 0))
         motor_ia = datos.get('motor_ia', 'ISO') # ISO por defecto
-        total = float(cantidad) * float(precio)
         
-        datos_entrada = [[cantidad, precio, total]]
+        # 2. Calcular el total
+        total = cantidad * precio
+        
+        # 3. Crear el DataFrame con los nombres exactos de las columnas usadas en Colab
+        datos_entrada = pd.DataFrame(
+            [[cantidad, precio, total]], 
+            columns=['Cantidad', 'Precio', 'Total']
+        )
 
-        # SELECTOR MULTI-MODELO DE SEGURIDAD
+        # 4. SELECTOR MULTI-MODELO DE SEGURIDAD
         if motor_ia == 'SVM':
             resultado = modelo_svm.predict(datos_entrada)
             nombre_motor = "One-Class SVM"
@@ -90,6 +97,7 @@ def detectar():
             resultado = modelo_iso.predict(datos_entrada)
             nombre_motor = "Isolation Forest"
 
+        # 5. La IA devuelve -1 si es anomalía, 1 si es normal
         es_anomalia = bool(resultado[0] == -1)
         
         return jsonify({
@@ -97,6 +105,7 @@ def detectar():
             "es_anomalia": es_anomalia
         })
     except Exception as e:
+        print(f"Error en /detectar_anomalia: {e}") # Para ver el error exacto en la terminal
         return jsonify({"error": str(e)}), 400
 
 if __name__ == '__main__':

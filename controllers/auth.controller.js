@@ -1,230 +1,153 @@
-// backend-inventario/controllers/auth.controller.js
-
-/**
- * @module controllers/auth.controller
- * @description Controlador de autenticación para registro y login de usuarios
- * @version 1.0.0
- * @requires bcrypt
- * @requires jsonwebtoken
- * @requires dotenv
- * @requires ../config/db
- */
-
 import bcrypt from "bcrypt";
 import jwt from "jsonwebtoken";
 import dotenv from "dotenv";
 import db from "../config/db.js";
 
-// Configurar variables de entorno
 dotenv.config();
-
-/**
- * @constant {number} saltRounds - Número de rondas de sal para bcrypt
- * @description Define la complejidad del hash de contraseñas (10 = balance entre seguridad y rendimiento)
- */
 const saltRounds = 10;
+const JWT_SECRET = process.env.JWT_SECRET || "tu_secreto_super_seguro";
 
-/**
- * @constant {string} JWT_SECRET - Clave secreta para firmar tokens JWT
- * @description Obtenida desde variables de entorno para mayor seguridad
- */
-const JWT_SECRET = process.env.JWT_SECRET;
-
-// =======================================================
-// FUNCIÓN REGISTRAR USUARIO
-// =======================================================
-
-/**
- * @function registrarUsuario
- * @async
- * @description Registra un nuevo usuario en el sistema con contraseña hasheada
- *
- * @param {Object} req - Objeto de solicitud Express
- * @param {Object} req.body - Cuerpo de la solicitud
- * @param {string} req.body.nombre - Nombre del usuario (opcional)
- * @param {string} req.body.apellido - Apellido del usuario (opcional)
- * @param {string} req.body.cedula - Cédula del usuario (opcional)
- * @param {string} req.body.correo_electronico - Correo electrónico (obligatorio)
- * @param {string} req.body.contrasena - Contraseña en texto plano (obligatorio)
- * @param {number} req.body.id_rol - ID del rol del usuario (obligatorio)
- *
- * @param {Object} res - Objeto de respuesta Express
- *
- * @returns {Object} Respuesta JSON con resultado del registro
- *
- * @throws {400} Si faltan campos obligatorios
- * @throws {409} Si el correo electrónico ya está registrado
- * @throws {500} Error interno del servidor
- *
- * @example
- * // POST /api/auth/registro
- * {
- *   "nombre": "Juan",
- *   "apellido": "Pérez",
- *   "correo_electronico": "juan@example.com",
- *   "contrasena": "miContraseña123",
- *   "id_rol": 2
- * }
- */
+// 1. REGISTRAR USUARIO
 export const registrarUsuario = async (req, res) => {
-  const { nombre, apellido, cedula, correo_electronico, contrasena, id_rol } =
-    req.body;
-
-  // Validar campos obligatorios
-  if (!correo_electronico || !contrasena || !id_rol) {
-    return res.status(400).json({
-      message: "Faltan campos obligatorios (correo, contraseña, rol).",
-    });
-  }
+  const { nombre, apellido, cedula, telefono, correo_electronico, contrasena, id_rol } = req.body;
+  if (!correo_electronico || !contrasena || !id_rol) return res.status(400).json({ message: "Faltan campos obligatorios." });
 
   let connection;
   try {
     connection = await db.getConnection();
+    const [existing] = await connection.query("SELECT id_usuario FROM usuarios WHERE correo_electronico = ? OR cedula = ?", [correo_electronico, cedula]);
+    if (existing.length > 0) return res.status(409).json({ message: "El correo o la cédula ya están registrados." });
 
-    // Verificar si el usuario ya existe
-    const [existingUsers] = await connection.query(
-      "SELECT id_usuario FROM usuarios WHERE correo_electronico = ?",
+    const contrasena_hash = await bcrypt.hash(contrasena, saltRounds);
+
+    await connection.query(
+      `INSERT INTO usuarios (nombre, apellido, cedula, telefono, correo_electronico, contrasena_hash, id_rol, estado) VALUES (?, ?, ?, ?, ?, ?, ?, 'Activo')`,
+      [nombre, apellido, cedula, telefono || "No registrado", correo_electronico, contrasena_hash, id_rol]
+    );
+    res.status(201).json({ message: "Personal registrado exitosamente." });
+  } catch (error) { res.status(500).json({ message: "Error al registrar." }); } 
+  finally { if (connection) connection.release(); }
+};
+
+// 2. LOGIN (Corregido: Filtra por correo electrónico)
+export const loginUsuario = async (req, res) => {
+  const { correo_electronico, contrasena } = req.body;
+  let connection;
+  try {
+    connection = await db.getConnection();
+
+    // ERROR CORREGIDO: Faltaba el WHERE correo_electronico = ?
+    const [users] = await connection.query(
+      `SELECT u.id_usuario, u.nombre, u.contrasena_hash, u.id_rol, u.estado, r.nombre_rol 
+       FROM usuarios u 
+       LEFT JOIN roles r ON u.id_rol = r.id_rol 
+       WHERE u.correo_electronico = ?`, 
       [correo_electronico]
     );
 
-    if (existingUsers.length > 0) {
-      return res.status(409).json({
-        message: "El correo electrónico ya está registrado.",
-      });
-    }
+    if (users.length === 0) return res.status(401).json({ message: "Credenciales inválidas." });
 
-    // Hashear contraseña antes de almacenarla
-    const contrasena_hash = await bcrypt.hash(contrasena, saltRounds);
+    const user = users[0];
+    // CORRECCIÓN: MySQL guarda 'Inactivo', no 'INACTIVO'
+    if (user.estado === "Inactivo") return res.status(403).json({ message: "Esta cuenta ha sido desactivada. Contacte a Sistemas." });
 
-    // Insertar nuevo usuario en la base de datos
+    const isMatch = await bcrypt.compare(contrasena, user.contrasena_hash);
+    if (!isMatch) return res.status(401).json({ message: "Credenciales inválidas." });
+
+    const token = jwt.sign({ id_usuario: user.id_usuario, id_rol: user.id_rol }, JWT_SECRET, { expiresIn: "1d" });
+
+    res.status(200).json({ message: "Login exitoso.", token, usuario: { id: user.id_usuario, rol: user.nombre_rol, nombre: user.nombre } });
+  } catch (error) { res.status(500).json({ message: "Error en el servidor." }); } 
+  finally { if (connection) connection.release(); }
+};
+
+// 3. OBTENER DIRECTORIO
+export const obtenerUsuarios = async (req, res) => {
+  let connection;
+  try {
+    connection = await db.getConnection();
+    const [users] = await connection.query(
+      `SELECT id_usuario, nombre, apellido, cedula, telefono, correo_electronico, estado, 
+       DATE_FORMAT(fecha_creacion, '%d-%m-%Y %H:%i') as fecha, u.id_rol, IFNULL(r.nombre_rol, 'Sin Rol') as nombre_rol 
+       FROM usuarios u LEFT JOIN roles r ON u.id_rol = r.id_rol ORDER BY id_usuario DESC`
+    );
+    res.status(200).json(users);
+  } catch (error) { res.status(500).json({ message: "Error al obtener usuarios." }); } 
+  finally { if (connection) connection.release(); }
+};
+
+// 4. ACTUALIZAR DATOS DE USUARIO (Editar Completo)
+export const actualizarUsuario = async (req, res) => {
+  const { id } = req.params;
+  const { nombre, apellido, cedula, telefono, correo_electronico, estado } = req.body;
+
+  if (!nombre || !apellido || !correo_electronico) return res.status(400).json({ message: "Faltan datos obligatorios." });
+
+  let connection;
+  try {
+    connection = await db.getConnection();
     const [result] = await connection.query(
-      `INSERT INTO usuarios (nombre, apellido, cedula, correo_electronico, contrasena_hash, id_rol)
-       VALUES (?, ?, ?, ?, ?, ?)`,
-      [nombre, apellido, cedula, correo_electronico, contrasena_hash, id_rol]
+      `UPDATE usuarios SET nombre=?, apellido=?, cedula=?, telefono=?, correo_electronico=?, estado=? WHERE id_usuario=?`,
+      [nombre, apellido, cedula, telefono || null, correo_electronico, estado, id]
     );
 
-    // Respuesta exitosa
-    res.status(201).json({
-      message: "Usuario registrado exitosamente.",
-      userId: result.insertId,
-    });
+    if (result.affectedRows === 0) return res.status(404).json({ message: "Usuario no encontrado." });
+    res.status(200).json({ message: "Usuario actualizado." });
+  } catch (error) { res.status(500).json({ message: "Error al actualizar usuario." }); } 
+  finally { if (connection) connection.release(); }
+};
+
+// 5. ELIMINAR USUARIO DEFINITIVAMENTE
+export const eliminarUsuario = async (req, res) => {
+  const { id } = req.params;
+  let connection;
+  try {
+    connection = await db.getConnection();
+    await connection.query(`DELETE FROM usuarios WHERE id_usuario = ?`, [id]);
+    res.status(200).json({ message: "Usuario eliminado correctamente del sistema." });
   } catch (error) {
-    console.error("Error al registrar usuario:", error);
-    res.status(500).json({
-      message: "Error interno del servidor al registrar usuario.",
-    });
+    res.status(409).json({ message: "No se puede eliminar porque ya tiene registros asociados. En su lugar, Inactívelo." });
+  } finally { if (connection) connection.release(); }
+};
+
+// =======================================================
+// CAMBIAR ESTADO USUARIO (Toggle Activo/Inactivo)
+// =======================================================
+export const cambiarEstadoUsuario = async (req, res) => {
+  const { id } = req.params;
+  const { estado } = req.body; 
+
+  let connection;
+  try {
+    connection = await db.getConnection();
+    await connection.query(
+      `UPDATE usuarios SET estado = ? WHERE id_usuario = ?`,
+      [estado, id]
+    );
+    res.status(200).json({ message: `Estado actualizado a ${estado}.` });
+  } catch (error) {
+    res.status(500).json({ message: "Error al cambiar el estado del usuario." });
   } finally {
-    // Liberar conexión a la base de datos
     if (connection) connection.release();
   }
 };
 
-// =======================================================
-// FUNCIÓN LOGIN USUARIO
-// =======================================================
-
-/**
- * @function loginUsuario
- * @async
- * @description Autentica un usuario existente y genera un token JWT
- *
- * @param {Object} req - Objeto de solicitud Express
- * @param {Object} req.body - Cuerpo de la solicitud
- * @param {string} req.body.correo_electronico - Correo electrónico del usuario
- * @param {string} req.body.contrasena - Contraseña en texto plano
- *
- * @param {Object} res - Objeto de respuesta Express
- *
- * @returns {Object} Respuesta JSON con token JWT y datos del usuario
- *
- * @throws {400} Si faltan credenciales
- * @throws {401} Si las credenciales son inválidas
- * @throws {500} Error interno del servidor
- *
- * @example
- * // POST /api/auth/login
- * {
- *   "correo_electronico": "juan@example.com",
- *   "contrasena": "miContraseña123"
- * }
- *
- * // Respuesta exitosa
- * {
- *   "message": "Login exitoso.",
- *   "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
- *   "usuario": {
- *     "id": 1,
- *     "rol": "Administrador"
- *   }
- * }
- */
-export const loginUsuario = async (req, res) => {
-  const { correo_electronico, contrasena } = req.body;
-
-  // Validar presencia de credenciales
-  if (!correo_electronico || !contrasena) {
-    return res.status(400).json({
-      message: "Debe ingresar correo electrónico y contraseña.",
-    });
-  }
-
+// 6. CAMBIAR CONTRASEÑA (Mi Perfil)
+export const cambiarPassword = async (req, res) => {
+  const { id_usuario, password_actual, password_nueva } = req.body;
   let connection;
   try {
     connection = await db.getConnection();
+    const [users] = await connection.query(`SELECT contrasena_hash FROM usuarios WHERE id_usuario = ?`, [id_usuario]);
+    if (users.length === 0) return res.status(404).json({ message: "Usuario no encontrado." });
 
-    /**
-     * @description Consulta que obtiene usuario y su rol mediante JOIN
-     * @constant {Array} users - Resultado de la consulta con datos del usuario
-     */
-    const [users] = await connection.query(
-      `SELECT id_usuario, contrasena_hash, u.id_rol, nombre_rol 
-       FROM usuarios u 
-       JOIN roles r ON u.id_rol = r.id_rol 
-       WHERE correo_electronico = ?`,
-      [correo_electronico]
-    );
+    const isMatch = await bcrypt.compare(password_actual, users[0].contrasena_hash);
+    if (!isMatch) return res.status(400).json({ message: "La contraseña actual es incorrecta." });
 
-    // Verificar si el usuario existe
-    if (users.length === 0) {
-      return res.status(401).json({ message: "Credenciales inválidas." });
-    }
+    const nuevoHash = await bcrypt.hash(password_nueva, saltRounds);
+    await connection.query(`UPDATE usuarios SET contrasena_hash = ? WHERE id_usuario = ?`, [nuevoHash, id_usuario]);
 
-    const user = users[0];
-
-    // Comparar contraseña proporcionada con hash almacenado
-    const isMatch = await bcrypt.compare(contrasena, user.contrasena_hash);
-
-    if (!isMatch) {
-      return res.status(401).json({ message: "Credenciales inválidas." });
-    }
-
-    /**
-     * @constant {Object} payload - Payload del token JWT
-     * @property {number} id_usuario - ID único del usuario
-     * @property {number} id_rol - ID del rol para autorización
-     */
-    const payload = {
-      id_usuario: user.id_usuario,
-      id_rol: user.id_rol, // Esencial para autorización en rutas protegidas
-    };
-
-    // Generar token JWT válido por 1 día
-    const token = jwt.sign(payload, JWT_SECRET, { expiresIn: "1d" });
-
-    // Respuesta exitosa con token y datos del usuario
-    res.status(200).json({
-      message: "Login exitoso.",
-      token: token,
-      usuario: {
-        id: user.id_usuario,
-        rol: user.nombre_rol,
-      },
-    });
-  } catch (error) {
-    console.error("Error durante el login:", error);
-    res.status(500).json({ message: "Error interno del servidor." });
-  } finally {
-    // Liberar conexión a la base de datos
-    if (connection) connection.release();
-  }
+    res.status(200).json({ message: "Contraseña actualizada exitosamente." });
+  } catch (error) { res.status(500).json({ message: "Error al cambiar contraseña." }); } 
+  finally { if (connection) connection.release(); }
 };

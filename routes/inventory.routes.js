@@ -10,11 +10,13 @@ import { crearLote, obtenerHistorialLotes } from '../controllers/lots.controller
 // Importamos controladores de Ingresos Físicos
 import { obtenerLotesPendientes, registrarIngresoFormal } from '../controllers/entries.controller.js'; 
 
-// Importamos controladores de Salidas e Historial
-import { registrarSalidaFormal } from '../controllers/outputs.controller.js';
+// Importamos controladores de Salidas y Auditoría IA (TODO UNIFICADO AQUÍ)
+import { registrarSalidaFormal, obtenerAuditorias, resolverAuditoria } from '../controllers/outputs.controller.js';
+
+// Importamos controladores de Historial
 import { obtenerHistorial } from '../controllers/history.controller.js';
 
-// --- AQUÍ ESTÁ LA CORRECCIÓN: Se agregó guardarNotaIngreso ---
+// Importamos controladores de Notas de Ingreso
 import { guardarNotaIngreso, obtenerNotasIngreso, obtenerDetalleNota, obtenerSiguienteSecuencial } from '../controllers/notes.controller.js';
 
 // Importamos middlewares de seguridad
@@ -33,7 +35,7 @@ router.post('/lotes', protegerRuta, verificarRol([1, 2, 4]), crearLote);
 // === RUTAS DE RECEPCIÓN FÍSICA (SINCOT) ===
 // RUTA GET para que React lea los lotes "CREADOS"
 router.get('/lotes/pendientes', protegerRuta, obtenerLotesPendientes);
-// RUTA POST para guardar el ingreso físico (Mágico)
+// RUTA POST para guardar el ingreso físico
 router.post('/ingresos/formal', protegerRuta, verificarRol([1, 2, 4]), registrarIngresoFormal);
 
 // --- RUTAS DE PRODUCTOS ---
@@ -43,7 +45,7 @@ router.put('/:id', protegerRuta, verificarRol([1, 2]), actualizarProducto);
 router.delete('/:id', protegerRuta, verificarRol([1]), eliminarProducto);   
 
 // --- RUTAS DE SALIDAS E HISTORIAL ---
-router.post('/salida', registrarSalidaFormal);
+router.post('/salida', protegerRuta, registrarSalidaFormal);
 router.get('/historial', protegerRuta, obtenerHistorial);
 
 // --- RUTAS DE NOTAS DE INGRESO ---
@@ -55,4 +57,9 @@ router.get('/notas-ingreso/siguiente', protegerRuta, obtenerSiguienteSecuencial)
 
 // La ruta del :id siempre va al final porque es un "comodín"
 router.get('/notas-ingreso/:id', protegerRuta, obtenerDetalleNota);
+
+// --- NUEVAS RUTAS DE AUDITORÍA IA ---
+router.get('/auditoria-ia', protegerRuta, obtenerAuditorias);
+router.post('/auditoria-ia/resolver', protegerRuta, resolverAuditoria);
+
 export default router;
