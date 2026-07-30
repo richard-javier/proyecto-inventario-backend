@@ -14,7 +14,8 @@ import { obtenerLotesPendientes, registrarIngresoFormal } from '../controllers/e
 import { registrarSalidaFormal, obtenerAuditorias, resolverAuditoria } from '../controllers/outputs.controller.js';
 
 // Importamos controladores de Historial
-import { obtenerHistorial } from '../controllers/history.controller.js';
+import { obtenerHistorial, registrarMovimientoInterno } from '../controllers/history.controller.js'; // <-- Importación agregada
+import { obtenerSerialesEnBodega, obtenerSerialesEnviados } from '../controllers/serials.controller.js';
 
 // Importamos controladores de Notas de Ingreso
 import { guardarNotaIngreso, obtenerNotasIngreso, obtenerDetalleNota, obtenerSiguienteSecuencial } from '../controllers/notes.controller.js';
@@ -45,8 +46,11 @@ router.put('/:id', protegerRuta, verificarRol([1, 2]), actualizarProducto);
 router.delete('/:id', protegerRuta, verificarRol([1]), eliminarProducto);   
 
 // --- RUTAS DE SALIDAS E HISTORIAL ---
+router.post('/movimiento-interno', protegerRuta, registrarMovimientoInterno);
 router.post('/salida', protegerRuta, registrarSalidaFormal);
 router.get('/historial', protegerRuta, obtenerHistorial);
+router.get('/seriales/en-bodega', protegerRuta, verificarRol([1, 2]), obtenerSerialesEnBodega);
+router.get('/seriales/enviados', protegerRuta, verificarRol([1, 2]), obtenerSerialesEnviados);
 
 // --- RUTAS DE NOTAS DE INGRESO ---
 router.post('/notas-ingreso', protegerRuta, guardarNotaIngreso);

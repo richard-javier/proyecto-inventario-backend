@@ -1,8 +1,10 @@
 import db from "../config/db.js";
+import { normalizarSkusExistentes } from "./sku.controller.js";
 
 // 1. OBTENER TODOS LOS PRODUCTOS
 export const obtenerProductos = async (req, res) => {
   try {
+    await normalizarSkusExistentes(db);
     const [rows] = await db.query(
       "SELECT * FROM productos ORDER BY fecha_creacion DESC",
     );
@@ -88,7 +90,7 @@ export const crearProducto = async (req, res) => {
         0, // stock_actual nace en 0
         stock_minimo || 5,
         stock_maximo || 50,
-        "Por Asignar",
+        null,
       ],
     );
 
@@ -117,21 +119,30 @@ export const crearProducto = async (req, res) => {
   }
 };
 
-// 3. ACTUALIZAR UN PRODUCTO EXISTENTE (Ahora soporta Descontinuar/Reactivar)
+// 3. ACTUALIZAR UN PRODUCTO EXISTENTE (CORREGIDO PARA TRAZABILIDAD)
 export const actualizarProducto = async (req, res) => {
   const { id } = req.params;
-  const { nombre_producto, especificaciones, stock_minimo, stock_maximo, status_equipo } = req.body;
+  const { nombre_producto, especificaciones, stock_minimo, stock_maximo, status_equipo, ubicacion_bodega } = req.body;
   
   try {
-    const [result] = await db.query(
-      "UPDATE productos SET nombre_producto = ?, especificaciones = ?, stock_minimo = ?, stock_maximo = ?, status_equipo = COALESCE(?, status_equipo) WHERE id_producto = ?",
-      [nombre_producto, especificaciones, stock_minimo, stock_maximo, status_equipo, id]
-    );
+    // Si envían ubicacion_bodega, actualizamos también la columna física
+    let query = "UPDATE productos SET nombre_producto = ?, especificaciones = ?, stock_minimo = ?, stock_maximo = ?, status_equipo = COALESCE(?, status_equipo)";
+    let params = [nombre_producto, especificaciones, stock_minimo, stock_maximo, status_equipo];
+
+    if (ubicacion_bodega) {
+        query += ", ubicacion_bodega = ?";
+        params.push(ubicacion_bodega);
+    }
+    
+    query += " WHERE id_producto = ?";
+    params.push(id);
+
+    const [result] = await db.query(query, params);
     
     if (result.affectedRows === 0) {
-        return res.status(404).json({ message: "Producto no encontrado en el sistema." });
+        return res.status(404).json({ message: "Producto no encontrado." });
     }
-    res.json({ message: "✅ Producto actualizado correctamente." });
+    res.json({ message: "✅ Producto actualizado y traza física sincronizada." });
   } catch (error) {
     console.error("❌ Error al actualizar producto:", error);
     res.status(500).json({ message: "Error interno al actualizar." });

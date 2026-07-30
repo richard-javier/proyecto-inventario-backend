@@ -15,9 +15,23 @@ dotenv.config();
 
 const app = express();
 const PORT = process.env.PORT || 3001; 
+const HOST = process.env.HOST || '0.0.0.0';
+const allowedOrigins = (process.env.CORS_ORIGIN || 'http://localhost:5173,https://SINCOT,https://sincot.local')
+  .split(',')
+  .map((origin) => origin.trim())
+  .filter(Boolean);
 
 const corsOptions = {
-  origin: 'http://localhost:5173', 
+  origin(origin, callback) {
+    if (!origin || allowedOrigins.includes(origin)) return callback(null, true);
+    if (/^http:\/\/(localhost|127\.0\.0\.1|\d{1,3}(?:\.\d{1,3}){3}):5173$/.test(origin)) {
+      return callback(null, true);
+    }
+    if (/^https:\/\/(SINCOT|sincot\.local)$/i.test(origin)) {
+      return callback(null, true);
+    }
+    return callback(new Error(`Origen no permitido por CORS: ${origin}`));
+  },
   methods: 'GET,HEAD,PUT,PATCH,POST,DELETE',
   credentials: true,
 };
@@ -38,6 +52,6 @@ app.get('/', (req, res) => {
 
 // ... (El resto de tu código sigue igual)
 
-app.listen(PORT, () => {
-  console.log(`🚀 Servidor corriendo en http://localhost:${PORT}`);
+app.listen(PORT, HOST, () => {
+  console.log(`🚀 Servidor corriendo en http://${HOST}:${PORT}`);
 });

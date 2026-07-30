@@ -1,25 +1,37 @@
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 import joblib
+import os
 import pandas as pd
-import numpy as np
 
 app = Flask(__name__)
 CORS(app)
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+def cargar_modelo(nombre_archivo):
+    return joblib.load(os.path.join(BASE_DIR, nombre_archivo))
 
 # ==========================================
 # 1. CARGA DE TODOS LOS CEREBROS (Archivos .pkl)
 # ==========================================
 print("Iniciando SINCOT Neural Engine... Cargando modelos...")
-modelo_rf = joblib.load('random_forest_sincot.pkl')
-modelo_xgb = joblib.load('xgboost_sincot.pkl')
-modelo_lr = joblib.load('linear_regression_sincot.pkl')
+modelo_rf = cargar_modelo('random_forest_sincot.pkl')
+modelo_xgb = cargar_modelo('xgboost_sincot.pkl')
+modelo_lr = cargar_modelo('linear_regression_sincot.pkl')
 
-modelo_iso = joblib.load('isolation_forest_sincot.pkl')
-modelo_svm = joblib.load('one_class_svm_sincot.pkl')
+modelo_iso = cargar_modelo('isolation_forest_sincot.pkl')
+modelo_svm = cargar_modelo('one_class_svm_sincot.pkl')
 
-le = joblib.load('label_encoder_sincot.pkl')
+le = cargar_modelo('label_encoder_sincot.pkl')
 print("✅ Los 5 Modelos y el Diccionario cargados correctamente.")
+
+# Métricas obtenidas con la partición de prueba reproducible del entrenamiento
+# (test_size=0.20 y random_state=42). No representan una confianza individual.
+METRICAS_DEMANDA = {
+    'XGB': {'mae': 3.52, 'rmse': 10.86, 'r2': -0.62},
+    'LR': {'mae': 19.70, 'rmse': 22.64, 'r2': -6.03},
+    'RF': {'mae': 7.76, 'rmse': 36.30, 'r2': -17.07},
+}
 
 # ==========================================
 # 2. RUTAS DE LA API
@@ -40,24 +52,33 @@ def predecir():
         mes = int(datos['mes'])
         anio = int(datos['anio'])
         precio = float(datos['precio'])
-        motor_ia = datos.get('motor_ia', 'RF') # RF por defecto si no envían nada
+        motor_ia = str(datos.get('motor_ia', 'XGB')).upper()
+
+        if mes < 1 or mes > 12:
+            raise ValueError('El mes debe estar entre 1 y 12.')
+        if anio < 2000 or anio > 2100:
+            raise ValueError('El año indicado no es válido.')
+        if precio < 0:
+            raise ValueError('El precio no puede ser negativo.')
         
         id_num = le.transform([str(codigo)])[0]
-        datos_entrada = [[id_num, mes, anio, precio]]
+        datos_entrada = pd.DataFrame(
+            [[id_num, mes, anio, precio]],
+            columns=['Producto_Numerico', 'Mes', 'Año', 'Precio']
+        )
         
         # SELECTOR MULTI-MODELO
         if motor_ia == 'XGB':
             prediccion = modelo_xgb.predict(datos_entrada)
-            confianza = round(np.random.uniform(23.0, 45.0), 1) # Baja confianza real por bajo R2
             nombre_motor = "XGBoost"
         elif motor_ia == 'LR':
             prediccion = modelo_lr.predict(datos_entrada)
-            confianza = round(np.random.uniform(5.0, 15.0), 1) # Confianza nula
             nombre_motor = "Regresión Lineal Múltiple"
-        else:
+        elif motor_ia == 'RF':
             prediccion = modelo_rf.predict(datos_entrada)
-            confianza = round(np.random.uniform(82.0, 95.0), 1) # Alta confianza por R2 de 0.82
             nombre_motor = "Random Forest Regressor"
+        else:
+            raise ValueError('Motor de predicción no reconocido.')
         
         # Evitar predicciones negativas de modelos malos
         cantidad_final = int(round(prediccion[0]))
@@ -66,7 +87,7 @@ def predecir():
         return jsonify({
             "motor_utilizado": nombre_motor,
             "cantidad_estimada": cantidad_final,
-            "confianza": confianza
+            "metricas_evaluacion": METRICAS_DEMANDA[motor_ia]
         })
     except Exception as e:
         return jsonify({"error": True, "mensaje": str(e)}), 400
@@ -97,7 +118,7 @@ def detectar():
             resultado = modelo_iso.predict(datos_entrada)
             nombre_motor = "Isolation Forest"
 
-        # 5. La IA devuelve -1 si es anomalía, 1 si es normal
+        # 5. La IA devuelve -1 si es anomalía, 1 si es normal.
         es_anomalia = bool(resultado[0] == -1)
         
         return jsonify({
@@ -109,4 +130,4 @@ def detectar():
         return jsonify({"error": str(e)}), 400
 
 if __name__ == '__main__':
-    app.run(port=5000, debug=True)
+    app.run(host='0.0.0.0', port=int(os.getenv('PORT', 5000)), debug=os.getenv('FLASK_DEBUG', '0') == '1')
